@@ -1,10 +1,12 @@
 import logging
+from mimetypes import inited
 from wsgiref.util import application_uri
 
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 
 from config import BOT_TOKEN
+from database import init_database
 
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO
@@ -31,6 +33,8 @@ async def help_command(update:Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 def main():
+
+    init_database()
 
     app = Application.builder().token(BOT_TOKEN).job_queue(None).build()
 
