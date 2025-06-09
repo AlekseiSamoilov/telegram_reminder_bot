@@ -3,7 +3,7 @@ from datetime import datetime, timedelta
 from time import strftime
 from typing import Optional
 
-from six import add_move
+# from six import add_move
 
 
 def parse_time(time_string: str) -> Optional[datetime]:
