@@ -64,8 +64,8 @@ class ReminderChecker:
                 tasks = []
                 for reminder_id, user_id, text, remind_time in pending_reminders:
 
-                task = self.send_reminder(user_id, text, reminder_id)
-                tasks.append(task)
+                    task = self.send_reminder(user_id, text, reminder_id)
+                    tasks.append(task)
                 # Выполняем все задачи параллельно
                 await asyncio.gather(*tasks, return_exceptions=True)
 
@@ -92,7 +92,7 @@ class ReminderChecker:
                 logger.error(f"Ошибка в основном цикле проверки {e}")
                 await asyncio.sleep(interval)
 
-    async def stop_checking(self):
+    def stop_checking(self):
         self.is_running = False
         logger.info("Проверка напоминаний остановлена")
 

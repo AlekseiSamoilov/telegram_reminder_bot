@@ -191,6 +191,14 @@ async def delete_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             '❌ Произошла ошибка при удалении напоминания.'
         )
 
+def setup_handlers(app: Application):
+
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("help", help_command))
+    app.add_handler(CommandHandler("remind", remind_command))
+    app.add_handler(CommandHandler("list", list_command))
+    app.add_handler(CommandHandler("delete", delete_command))
+
 def main():
 
     init_database()
