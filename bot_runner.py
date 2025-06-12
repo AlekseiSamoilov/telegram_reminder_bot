@@ -1,153 +1,130 @@
 import asyncio
-import signal
 import logging
-from typing import List
-from telegram.ext import Application
+from datetime import datetime
+from telegram import Bot
+from telegram.error import TelegramError
 
 from config import BOT_TOKEN
-from main import setup_handlers
-from reminder_checker import ReminderChecker
-from database import init_database
+from database import get_pending_reminders, delete_reminder
 
-logging.basicConfig(
-    format = '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
-)
+# Настройка логирования
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-class BotManager:
 
-    def __init__(self):
-        self.app = None
-        self.reminder_checker = None
-        self.tasks: List[asyncio.Task] = []
+class ReminderChecker:
+    """Класс для проверки и отправки напоминаний"""
 
-    async def setup_bot(self):
-        logger.info("🤖 Инициализация Telegram бота...")
+    def __init__(self, bot_token: str):
+        """Инициализация чекера напоминаний"""
+        self.bot = Bot(token=bot_token)
+        self.is_running = False
 
-        init_database()
+    async def send_reminder(self, user_id: int, text: str, reminder_id: int):
+        """Отправляет напоминание пользователю"""
+        try:
+            message = f"🔔 **НАПОМИНАНИЕ!**\n\n📝 {text}"
 
-        self.app = Application.builder().token(BOT_TOKEN).job_queue(None).build()
-
-        setup_handlers(self.app)
-
-        await self.app.initialize()
-        await self.app.start()
-
-        logger.info("✅ Telegram бот инициализирован")
-
-    async def setup_reminder_checker(self):
-
-        logger.info("⏰ Инициализация чекера напоминаний...")
-
-        self.reminder_checker = ReminderChecker(BOT_TOKEN)
-
-        logger.info("✅ Чекер напоминаний инициализирован")
-
-    async def start_service(self):
-        logger.info("🚀 Запуск всех сервисов...")
-
-        # Создаем задачи для параллельного выполнения
-        tasks = []
-
-        # Запуск Телеграм бота
-        if self.app:
-            bot_task = asyncio.create_task(
-                self.app.updater.start_polling(drop_pending_updates = True),
-                name = "telegram_bot"
+            await self.bot.send_message(
+                chat_id=user_id,
+                text=message,
+                parse_mode='Markdown'
             )
-            tasks.append(bot_task)
-            logger.info("Телеграм бот запущен")
 
-        # Запуск чекера напоминаний
-        if self.reminder_checker:
-            checker_task = asyncio.create_task(
-                self.reminder_checker.start_checking(interval=30),
-                name='reminder_checker'
-            )
-            tasks.append(checker_task)
-            logger.info("Чекер напоминаний запущен")
+            # Помечаем напоминание как отправленное
+            delete_reminder(reminder_id, user_id)
 
-        self.tasks = tasks
+            logger.info(f"Напоминание {reminder_id} отправлено пользователю {user_id}")
+
+        except TelegramError as e:
+            logger.error(f"Ошибка отправки напоминания {reminder_id} пользователю {user_id}: {e}")
+
+            if "bot was blocked by the user" in str(e).lower():
+                delete_reminder(reminder_id, user_id)
+                logger.info(f"Напоминание {reminder_id} удалено - пользователь заблокировал бота")
+
+        except Exception as e:
+            logger.error(f"Неожиданная ошибка при отправке напоминания {reminder_id}: {e}")
+
+    async def check_pending_reminders(self):
+        """Проверяет базу данных на наличие напоминаний для отправки"""
+        try:
+            logger.debug("🔍 Проверка напоминаний...")
+
+            # Получаем напоминания для отправки
+            pending_reminders = get_pending_reminders()
+
+            if pending_reminders:
+                logger.info(f"📨 Найдено {len(pending_reminders)} напоминаний для отправки")
+
+                # Создаем задачи для параллельной отправки
+                tasks = []
+                for reminder_id, user_id, text, remind_time in pending_reminders:
+                    task = self.send_reminder(user_id, text, reminder_id)
+                    tasks.append(task)
+
+                # Выполняем все задачи параллельно
+                await asyncio.gather(*tasks, return_exceptions=True)
+            else:
+                logger.debug("📭 Нет напоминаний для отправки")
+
+        except Exception as e:
+            logger.error(f"❌ Ошибка при проверке напоминаний: {e}")
+            # НЕ re-raise - продолжаем работу даже при ошибке
+
+    async def start_checking(self, interval: int = 60):
+        """Запускает бесконечный цикл проверки напоминаний"""
+        self.is_running = True
+        logger.info(f"🚀 Запуск проверки напоминаний каждые {interval} секунд")
 
         try:
-            await asyncio.gather(*tasks)
+            while self.is_running:
+                logger.debug(f"🔄 Цикл проверки, is_running = {self.is_running}")
+
+                # Проверяем напоминания
+                await self.check_pending_reminders()
+
+                # Ждем указанный интервал, но проверяем is_running каждую секунду
+                for i in range(interval):
+                    if not self.is_running:
+                        logger.info("🛑 Получен сигнал остановки во время ожидания")
+                        break
+                    await asyncio.sleep(1)
+
+                if not self.is_running:
+                    break
+
+        except asyncio.CancelledError:
+            logger.info("🛑 Задача чекера была отменена")
+            self.is_running = False
         except Exception as e:
-            logger.error(f"Ошибка в однои из сервисов: {e}")
-            raise
+            logger.error(f"❌ Критическая ошибка в основном цикле проверки: {e}")
+            import traceback
+            logger.error(f"Трейсбек: {traceback.format_exc()}")
+            self.is_running = False
+        finally:
+            logger.info("✅ Чекер напоминаний завершил работу")
 
-    async def stop_services(self):
-        logger.info("Остановка сервисов")
+    def stop_checking(self):
+        """Останавливает проверку напоминаний"""
+        logger.info("🛑 Получен запрос на остановку чекера")
+        self.is_running = False
 
-        if self.reminder_checker:
-            await self.reminder_checker.start_checking()
-            logger.info("Чекер напоминаний остановлен")
 
-        # Отменяем все асинхронные задачи
-        for task in self.tasks:
-            if not task.done():
-                task.cancel()
-                try:
-                    await task
-                except asyncio.CancelledError:
-                    pass #Это нормально при отмене
-
-        if self.app:
-            await self.app.stop()
-            await self.app.shutdown()
-            logger.info("Телеграм бот остановлен")
-
-        logger.info("Все сервисы остановлены")
-
-bot_manager = None
-
-def signal_handler(signum, frame):
-
-    logger.info(f"Получен сигнал {signum}. Завершение работы...")
-
-    if bot_manager:
-
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
-
-            asyncio.create_task(bot_manager.stop_services())
-        else:
-            loop.run_until_complete(bot_manager.stop_services())
-
+# Функция для автономного запуска
 async def main():
-    global bot_manager
+    """Главная функция для запуска чекера как отдельного процесса"""
+    checker = ReminderChecker(BOT_TOKEN)
 
     try:
-        logger.info("🎯 Запуск бота для напоминаний...")
-
-        bot_manager = BotManager()
-
-        signal.signal(signal.SIGINT, signal_handler)
-        signal.signal(signal.SIGTERM, signal_handler)
-
-        await bot_manager.setup_bot()
-        await bot_manager.setup_reminder_checker()
-
-        logger.info("🎉 Все компоненты инициализированы! Бот готов к работе!")
-        logger.info("📝 Доступные команды: /start, /help, /remind, /list, /delete")
-        logger.info("💡 Для остановки нажмите Ctrl+C")
-
-        await bot_manager.start_service()
-
+        # Запускаем проверку каждые 30 секунд
+        await checker.start_checking(interval=30)
     except KeyboardInterrupt:
         logger.info("👋 Программа остановлена пользователем")
-    except Exception as e:
-        logger.error(f"❌ Критическая ошибка: {e}")
-        raise
     finally:
-        if bot_manager:
-            await bot_manager.stop_services()
+        checker.stop_checking()
+
 
 if __name__ == '__main__':
-
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        print("\n👋 До свидания!")
-    except Exception as e:
-        print(f"❌ Ошибка запуска: {e}")
+    # Запускаем асинхронную функцию
+    asyncio.run(main())
