@@ -114,44 +114,26 @@ async def remind_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def list_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
+    reminders = get_active_reminders(user_id)
 
-    try:
-        reminders = get_active_reminders(user_id)
+    if not reminders:
+        await update.message.reply_text("📭 У вас нет активных напоминаний")
+        return
 
-        if not reminders:
-            await update.message.reply_text(
-                '📭 У вас нет активных напоминаний.\n\n'
-                'Создайте новое: `/remind через 30 минут текст`',
-                parse_mode='Markdown'
-            )
-            return
+    message_text = '📋 **Ваши активные напоминания:**\n\n'
 
-        message_list = ['📋 **Ваши активные напоминания:**\n']
-
-        for i, (reminder_id, text, reminder_time_str, created_at) in enumerate(reminders, 1):
+    for i, (reminder_id, text, reminder_time_str, created_at) in enumerate(reminders, 1):
 #             Конвертируем строку времени обратно в datetime
 #             formatted_time = format_time(remind_time)
-            remind_time = datetime.fromisoformat(reminder_time_str)
-            formatted_time = format_time(remind_time)
+        remind_time = datetime.fromisoformat(reminder_time_str)
+        formatted_time = remind_time.strftime("%d.%m.%Y в %H:%M")
 
-            # Добавляем строку с информацией о напоминании
-            message_list.append(
-                f'{i}. 📝 {text}\n'
-                f'   ⏰ {formatted_time}\n'
-                f'   🆔 ID: {reminder_id}\n'
-            )
+        # Добавляем строку с информацией о напоминании
+        message_text += f"{i}. 📝 {text}\n"
+        message_text += f"   ⏰ {formatted_time}\n"
+        message_text += f"   🆔 ID: {reminder_id}\n\n"
 
-            message = '\n'.join(message_list)
-
-            message += '\n\n💡 Для удаления: `/delete <ID>`'
-
-            await update.message.reply_text(message, parse_mode='Markdown')
-
-    except Exception as e:
-        logging.error(f"Ошибка при получении списка напоминаний: {e}")
-        await update.message.reply_text(
-            '❌ Произошла ошибка при получении списка напоминаний.'
-        )
+    await update.message.reply_text(message_text, parse_mode='Markdown')
 
 async def delete_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
@@ -205,11 +187,7 @@ def main():
 
     app = Application.builder().token(BOT_TOKEN).job_queue(None).build()
 
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("help", help_command))
-    app.add_handler(CommandHandler("remind", remind_command))
-    app.add_handler(CommandHandler("list", list_command))
-    app.add_handler(CommandHandler("delete", delete_command))
+    setup_handlers(app)
 
     print("🤖 Бот запущен и готов к работе!")
     print("📝 Доступные команды: /start, /help, /remind, /list, /delete")
